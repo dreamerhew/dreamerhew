@@ -1,0 +1,109 @@
+name: Public Market Data Endpoint Probe
+
+on:
+  push:
+    branches:
+      - "research/market-data-endpoint-probe-20261017"
+    paths:
+      - ".github/workflows/market-data-endpoint-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Request public 5-minute candles (no credentials)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, time, urllib.request, urllib.error
+          from datetime import datetime, timezone
+
+          now_ms = int(time.time() * 1000)
+          now_s = int(time.time())
+          endpoints = [
+              ("Binance Spot", "https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=5m&limit=5", "binance"),
+              ("Binance Spot alternate", "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=5m&limit=5", "binance"),
+              ("Binance USD-M Futures", "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=5m&limit=5", "binance"),
+              ("Bybit Spot", "https://api.bybit.com/v5/market/kline?category=spot&symbol=BTCUSDT&interval=5&limit=5", "bybit"),
+              ("Bybit Linear", "https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=5&limit=5", "bybit"),
+              ("OKX Spot", "https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar=5m&limit=5", "okx"),
+              ("OKX USDT Swap", "https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=5m&limit=5", "okx"),
+              ("Kraken Spot", "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=5", "kraken"),
+              ("Coinbase Exchange Spot", "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=300", "coinbase"),
+          ]
+
+          def parse(provider, payload):
+              closed = []
+              if provider == "binance":
+                  for r in payload:
+                      if int(r[6]) < now_ms:
+                          closed.append((int(r[0]), float(r[4])))
+              elif provider == "bybit":
+                  if int(payload.get("retCode", -1)) != 0:
+                      raise ValueError("Bybit retCode=" + str(payload.get("retCode")) + " " + str(payload.get("retMsg")))
+                  for r in payload.get("result", {}).get("list", []):
+                      start = int(r[0])
+                      if start + 300_000 <= now_ms:
+                          closed.append((start, float(r[4])))
+              elif provider == "okx":
+                  if payload.get("code") != "0":
+                      raise ValueError("OKX code=" + str(payload.get("code")) + " " + str(payload.get("msg")))
+                  for r in payload.get("data", []):
+                      if len(r) >= 9 and str(r[8]) == "1" and int(r[0]) + 300_000 <= now_ms:
+                          closed.append((int(r[0]), float(r[4])))
+              elif provider == "kraken":
+                  if payload.get("error"):
+                      raise ValueError("Kraken " + "; ".join(payload["error"]))
+                  keys = [k for k in payload.get("result", {}) if k != "last"]
+                  if not keys:
+                      raise ValueError("Kraken returned no OHLC rows")
+                  for r in payload["result"][keys[0]]:
+                      start = int(float(r[0]) * 1000)
+                      if start + 300_000 <= now_ms:
+                          closed.append((start, float(r[4])))
+              elif provider == "coinbase":
+                  for r in payload:
+                      if int(r[0]) + 300 <= now_s:
+                          closed.append((int(r[0]) * 1000, float(r[4])))
+              return sorted(closed)
+
+          results = []
+          for name, url, provider in endpoints:
+              result = {"name": name, "ok": False}
+              try:
+                  req = urllib.request.Request(url, headers={"User-Agent": "CaiSenPublicDataProbe/1.0", "Accept": "application/json"})
+                  with urllib.request.urlopen(req, timeout=8) as response:
+                      result["http_status"] = response.status
+                      payload = json.loads(response.read().decode("utf-8"))
+                  candles = parse(provider, payload)
+                  if not candles:
+                      raise ValueError("HTTP response received, but no fully closed 5-minute candle parsed")
+                  ts, close = candles[-1]
+                  result.update({
+                      "ok": True,
+                      "closed_candles": len(candles),
+                      "latest_closed_candle_utc": datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat(),
+                      "latest_close": close,
+                      "source_url": url,
+                  })
+              except Exception as e:
+                  result["error"] = type(e).__name__ + ": " + str(e)[:350]
+              print(json.dumps(result, ensure_ascii=False))
+              results.append(result)
+
+          ok_count = sum(1 for r in results if r["ok"])
+          print("SUMMARY: " + json.dumps({
+              "checked_at_utc": datetime.now(timezone.utc).isoformat(),
+              "successful_endpoints": ok_count,
+              "attempted_endpoints": len(results),
+              "successful_names": [r["name"] for r in results if r["ok"]],
+              "warning": "This tests public endpoint reachability from a GitHub-hosted runner only; it does not prove the user's PC/mobile network is able to connect."
+          }, ensure_ascii=False))
+          if ok_count == 0:
+              raise SystemExit("No public market endpoint returned parseable closed candles from this runner.")
+          PY
