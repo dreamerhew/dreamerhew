@@ -19,24 +19,26 @@ jobs:
       - name: Fetch and validate up to 250 public 5-minute candles (no credentials)
         shell: bash
         run: |
+          mkdir -p real_candles
           python - <<'PY'
-          import json, math, time, urllib.request
+          import csv, json, math, time, urllib.request
           from datetime import datetime, timezone
+          from pathlib import Path
 
           now_ms = int(time.time() * 1000)
           now_s = int(time.time())
           endpoints = [
-              ("Binance Spot", "https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=5m&limit=250", "binance"),
-              ("Binance Spot alternate", "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=5m&limit=250", "binance"),
-              ("Binance USD-M Futures", "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=5m&limit=250", "binance"),
-              ("Bybit Spot", "https://api.bybit.com/v5/market/kline?category=spot&symbol=BTCUSDT&interval=5&limit=250", "bybit"),
-              ("Bybit Spot official alternate", "https://api.bytick.com/v5/market/kline?category=spot&symbol=BTCUSDT&interval=5&limit=250", "bybit"),
-              ("Bybit Linear", "https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=5&limit=250", "bybit"),
-              ("Bybit Linear official alternate", "https://api.bytick.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=5&limit=250", "bybit"),
-              ("OKX Spot", "https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar=5m&limit=250", "okx"),
-              ("OKX USDT Swap", "https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=5m&limit=250", "okx"),
-              ("Kraken Spot", "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=5", "kraken"),
-              ("Coinbase Exchange Spot", "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=300", "coinbase"),
+              ("Binance Spot", "https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=5m&limit=250", "binance", "binance_spot_btcusdt"),
+              ("Binance Spot alternate", "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=5m&limit=250", "binance", "binance_spot_alt_btcusdt"),
+              ("Binance USD-M Futures", "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=5m&limit=250", "binance", "binance_usdm_btcusdt"),
+              ("Bybit Spot", "https://api.bybit.com/v5/market/kline?category=spot&symbol=BTCUSDT&interval=5&limit=250", "bybit", "bybit_spot_btcusdt"),
+              ("Bybit Spot official alternate", "https://api.bytick.com/v5/market/kline?category=spot&symbol=BTCUSDT&interval=5&limit=250", "bybit", "bybit_spot_alt_btcusdt"),
+              ("Bybit Linear", "https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=5&limit=250", "bybit", "bybit_linear_btcusdt"),
+              ("Bybit Linear official alternate", "https://api.bytick.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=5&limit=250", "bybit", "bybit_linear_alt_btcusdt"),
+              ("OKX Spot", "https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar=5m&limit=250", "okx", "okx_spot_btcusdt"),
+              ("OKX USDT Swap", "https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=5m&limit=250", "okx", "okx_usdt_swap_btcusdt"),
+              ("Kraken Spot", "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=5", "kraken", "kraken_spot_btcusd"),
+              ("Coinbase Exchange Spot", "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=300", "coinbase", "coinbase_spot_btcusd"),
           ]
 
           def candle(ts, o, h, l, c, v):
@@ -51,44 +53,45 @@ jobs:
           def parse(provider, payload):
               closed = []
               if provider == "binance":
-                  for r in payload:
-                      if int(r[6]) < now_ms:
-                          closed.append(candle(r[0], r[1], r[2], r[3], r[4], r[5]))
+                  for row in payload:
+                      if int(row[6]) < now_ms:
+                          closed.append(candle(row[0], row[1], row[2], row[3], row[4], row[5]))
               elif provider == "bybit":
                   if int(payload.get("retCode", -1)) != 0:
                       raise ValueError("Bybit retCode=" + str(payload.get("retCode")) + " " + str(payload.get("retMsg")))
-                  for r in payload.get("result", {}).get("list", []):
-                      start = int(r[0])
+                  for row in payload.get("result", {}).get("list", []):
+                      start = int(row[0])
                       if start + 300_000 <= now_ms:
-                          closed.append(candle(start, r[1], r[2], r[3], r[4], r[5]))
+                          closed.append(candle(start, row[1], row[2], row[3], row[4], row[5]))
               elif provider == "okx":
                   if payload.get("code") != "0":
                       raise ValueError("OKX code=" + str(payload.get("code")) + " " + str(payload.get("msg")))
-                  for r in payload.get("data", []):
-                      if len(r) >= 9 and str(r[8]) == "1" and int(r[0]) + 300_000 <= now_ms:
-                          closed.append(candle(r[0], r[1], r[2], r[3], r[4], r[5]))
+                  for row in payload.get("data", []):
+                      if len(row) >= 9 and str(row[8]) == "1" and int(row[0]) + 300_000 <= now_ms:
+                          closed.append(candle(row[0], row[1], row[2], row[3], row[4], row[5]))
               elif provider == "kraken":
                   if payload.get("error"):
                       raise ValueError("Kraken " + "; ".join(payload["error"]))
                   keys = [k for k in payload.get("result", {}) if k != "last"]
                   if not keys:
                       raise ValueError("Kraken returned no OHLC rows")
-                  for r in payload["result"][keys[0]]:
-                      start = int(float(r[0]) * 1000)
+                  for row in payload["result"][keys[0]]:
+                      start = int(float(row[0]) * 1000)
                       if start + 300_000 <= now_ms:
-                          closed.append(candle(start, r[1], r[2], r[3], r[4], r[6]))
+                          closed.append(candle(start, row[1], row[2], row[3], row[4], row[6]))
               elif provider == "coinbase":
-                  for r in payload:
-                      if int(r[0]) + 300 <= now_s:
-                          closed.append(candle(int(r[0]) * 1000, r[3], r[2], r[1], r[4], r[5]))
-              closed.sort(key=lambda c: c["t"])
-              times = [x["t"] for x in closed]
+                  for row in payload:
+                      if int(row[0]) + 300 <= now_s:
+                          closed.append(candle(int(row[0]) * 1000, row[3], row[2], row[1], row[4], row[5]))
+              closed.sort(key=lambda item: item["t"])
+              times = [item["t"] for item in closed]
               if len(set(times)) != len(times):
                   raise ValueError("duplicate candle timestamps")
               return closed
 
           results = []
-          for name, url, provider in endpoints:
+          headers = ["timestamp", "open", "high", "low", "close", "volume"]
+          for name, url, provider, file_stem in endpoints:
               result = {"name": name, "ok": False, "minimum_required_closed_candles": 200}
               try:
                   req = urllib.request.Request(url, headers={"User-Agent": "CaiSenPublicDataProbe/1.0", "Accept": "application/json"})
@@ -99,12 +102,22 @@ jobs:
                   result["valid_closed_candles"] = len(candles)
                   if len(candles) < 200:
                       raise ValueError(f"only {len(candles)} valid closed candles; at least 200 required for historical replay")
+                  csv_path = Path("real_candles") / (file_stem + ".csv")
+                  with csv_path.open("w", newline="", encoding="utf-8") as f:
+                      writer = csv.writer(f)
+                      writer.writerow(headers)
+                      for bar in candles:
+                          writer.writerow([
+                              datetime.fromtimestamp(bar["t"] / 1000, tz=timezone.utc).isoformat(),
+                              bar["o"], bar["h"], bar["l"], bar["c"], bar["v"]
+                          ])
                   first, last = candles[0], candles[-1]
                   result.update({
                       "ok": True,
+                      "csv_artifact": str(csv_path),
                       "first_closed_candle_utc": datetime.fromtimestamp(first["t"] / 1000, tz=timezone.utc).isoformat(),
                       "latest_closed_candle_utc": datetime.fromtimestamp(last["t"] / 1000, tz=timezone.utc).isoformat(),
-                      "latest_ohlcv": {k: last[k] for k in ["o","h","l","c","v"]},
+                      "latest_ohlcv": {key: last[key] for key in ["o","h","l","c","v"]},
                       "duplicate_timestamps": False,
                       "ohlc_invariants": "passed",
                       "source_url": url,
@@ -114,15 +127,23 @@ jobs:
               print(json.dumps(result, ensure_ascii=False))
               results.append(result)
 
-          ok = [r for r in results if r["ok"]]
+          ok = [item for item in results if item["ok"]]
           summary = {
               "checked_at_utc": datetime.now(timezone.utc).isoformat(),
               "successful_endpoints_with_200_plus_closed_bars": len(ok),
               "attempted_endpoints": len(results),
-              "successful_names": [r["name"] for r in ok],
+              "successful_names": [item["name"] for item in ok],
               "warning": "This tests public endpoint reachability and OHLCV parsing from a GitHub-hosted runner only; it does not prove the user's PC/mobile network is able to connect."
           }
           print("SUMMARY: " + json.dumps(summary, ensure_ascii=False))
           if not ok:
               raise SystemExit("No endpoint returned at least 200 valid, fully closed 5-minute candles.")
           PY
+      - name: Upload real candle CSV samples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-market-candles-${{ github.run_number }}
+          path: real_candles/*.csv
+          if-no-files-found: warn
+          retention-days: 7
