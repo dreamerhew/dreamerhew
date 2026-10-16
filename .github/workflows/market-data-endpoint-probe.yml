@@ -20,7 +20,7 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
-          import json, time, urllib.request, urllib.error
+          import json, time, urllib.request
           from datetime import datetime, timezone
 
           now_ms = int(time.time() * 1000)
@@ -30,7 +30,9 @@ jobs:
               ("Binance Spot alternate", "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=5m&limit=5", "binance"),
               ("Binance USD-M Futures", "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=5m&limit=5", "binance"),
               ("Bybit Spot", "https://api.bybit.com/v5/market/kline?category=spot&symbol=BTCUSDT&interval=5&limit=5", "bybit"),
+              ("Bybit Spot official alternate", "https://api.bytick.com/v5/market/kline?category=spot&symbol=BTCUSDT&interval=5&limit=5", "bybit"),
               ("Bybit Linear", "https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=5&limit=5", "bybit"),
+              ("Bybit Linear official alternate", "https://api.bytick.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=5&limit=5", "bybit"),
               ("OKX Spot", "https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar=5m&limit=5", "okx"),
               ("OKX USDT Swap", "https://www.okx.com/api/v5/market/candles?instId=BTC-USDT-SWAP&bar=5m&limit=5", "okx"),
               ("Kraken Spot", "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=5", "kraken"),
@@ -77,7 +79,7 @@ jobs:
               result = {"name": name, "ok": False}
               try:
                   req = urllib.request.Request(url, headers={"User-Agent": "CaiSenPublicDataProbe/1.0", "Accept": "application/json"})
-                  with urllib.request.urlopen(req, timeout=8) as response:
+                  with urllib.request.urlopen(req, timeout=6) as response:
                       result["http_status"] = response.status
                       payload = json.loads(response.read().decode("utf-8"))
                   candles = parse(provider, payload)
@@ -92,7 +94,7 @@ jobs:
                       "source_url": url,
                   })
               except Exception as e:
-                  result["error"] = type(e).__name__ + ": " + str(e)[:350]
+                  result["error"] = type(e).__name__ + ": " + str(e)[:250]
               print(json.dumps(result, ensure_ascii=False))
               results.append(result)
 
