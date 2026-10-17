@@ -1,0 +1,138 @@
+name: Collect Extended OKX Historical Candles
+
+on:
+  push:
+    branches:
+      - "research/market-data-endpoint-probe-20261017"
+    paths:
+      - ".github/workflows/okx-history-dataset.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Fetch multiple weeks of public 5-minute spot and swap candles
+        shell: bash
+        run: |
+          mkdir -p okx_history
+          python - <<'PY'
+          import csv, json, math, time, urllib.parse, urllib.request
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          BASE = "https://www.okx.com/api/v5/market/history-candles"
+          TARGET = 5000
+          INSTRUMENTS = [
+              "BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT",
+              "BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP", "XRP-USDT-SWAP", "DOGE-USDT-SWAP",
+          ]
+          now_ms = int(time.time() * 1000)
+          outputs = []
+          errors = []
+
+          def make_bar(row):
+              if len(row) < 9 or str(row[8]) != "1":
+                  return None
+              ts = int(row[0])
+              if ts + 300_000 > now_ms:
+                  return None
+              o, h, l, c, v = map(float, row[1:6])
+              if not all(math.isfinite(x) for x in (o,h,l,c,v)):
+                  raise ValueError("non-finite OHLCV")
+              if l > min(o,c) or h < max(o,c) or h < l or v < 0:
+                  raise ValueError("invalid OHLCV geometry")
+              return {"ts": ts, "o": o, "h": h, "l": l, "c": c, "v": v}
+
+          for inst in INSTRUMENTS:
+              bars = {}
+              cursor = None
+              pages = 0
+              try:
+                  while len(bars) < TARGET and pages < 70:
+                      params = {"instId": inst, "bar": "5m", "limit": "100"}
+                      if cursor is not None:
+                          params["after"] = str(cursor)
+                      url = BASE + "?" + urllib.parse.urlencode(params)
+                      request = urllib.request.Request(
+                          url, headers={"User-Agent":"CaiSenHistoryDataset/1.0","Accept":"application/json"}
+                      )
+                      with urllib.request.urlopen(request, timeout=10) as response:
+                          payload = json.loads(response.read().decode("utf-8"))
+                      if payload.get("code") != "0":
+                          raise RuntimeError("OKX code=" + str(payload.get("code")) + " " + str(payload.get("msg")))
+                      rows = payload.get("data") or []
+                      if not rows:
+                          break
+                      parsed = []
+                      for row in rows:
+                          bar = make_bar(row)
+                          if bar:
+                              parsed.append(bar)
+                      old_cursor = cursor
+                      for bar in parsed:
+                          bars[bar["ts"]] = bar
+                      new_cursor = min(int(row[0]) for row in rows)
+                      if old_cursor is not None and new_cursor >= old_cursor:
+                          raise RuntimeError("pagination cursor did not move backward")
+                      cursor = new_cursor
+                      pages += 1
+                      if len(rows) < 100:
+                          break
+                      time.sleep(0.12)
+                  ordered = sorted(bars.values(), key=lambda b: b["ts"])
+                  if len(ordered) < 1000:
+                      raise RuntimeError("collected fewer than 1,000 valid closed bars: " + str(len(ordered)))
+                  filename = "okx_history_" + inst.lower().replace("-", "_") + ".csv"
+                  path = Path("okx_history") / filename
+                  with path.open("w", newline="", encoding="utf-8") as f:
+                      writer = csv.writer(f)
+                      writer.writerow(["timestamp","open","high","low","close","volume"])
+                      for b in ordered:
+                          writer.writerow([
+                              datetime.fromtimestamp(b["ts"]/1000, tz=timezone.utc).isoformat(),
+                              b["o"], b["h"], b["l"], b["c"], b["v"]
+                          ])
+                  result = {
+                      "instId": inst, "bars": len(ordered), "pages": pages,
+                      "first_utc": datetime.fromtimestamp(ordered[0]["ts"]/1000,tz=timezone.utc).isoformat(),
+                      "last_utc": datetime.fromtimestamp(ordered[-1]["ts"]/1000,tz=timezone.utc).isoformat(),
+                      "file": str(path), "ohlc_validation": "passed",
+                      "duplicates": len(ordered) != len({b["ts"] for b in ordered}),
+                      "consecutive_interval_check": "record gaps reported separately, candles sorted by timestamp",
+                  }
+                  times = [b["ts"] for b in ordered]
+                  result["time_gaps_over_5m"] = sum(1 for a,b in zip(times,times[1:]) if b-a > 300_000)
+                  print(json.dumps(result, ensure_ascii=False))
+                  outputs.append(result)
+              except Exception as e:
+                  failure = {"instId": inst, "error": type(e).__name__ + ": " + str(e)[:400], "bars_before_failure": len(bars), "pages": pages}
+                  print(json.dumps(failure, ensure_ascii=False))
+                  errors.append(failure)
+          summary = {
+              "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+              "timeframe": "5m",
+              "target_bars_each_instrument": TARGET,
+              "successful_instruments": len(outputs),
+              "failed_instruments": len(errors),
+              "total_bars": sum(x["bars"] for x in outputs),
+              "results": outputs,
+              "errors": errors,
+              "warning": "Real public OKX OHLCV snapshots for research and replay, not independently labeled pattern truth and not evidence of trading profitability."
+          }
+          Path("okx_history/manifest.json").write_text(json.dumps(summary,indent=2,ensure_ascii=False)+"\n",encoding="utf-8")
+          if len(outputs) == 0:
+              raise SystemExit("No historical OKX datasets collected.")
+          PY
+      - name: Upload historical OHLCV dataset
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cai-sen-okx-5m-history
+          path: okx_history/*
+          if-no-files-found: warn
+          retention-days: 7
