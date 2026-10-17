@@ -14,7 +14,7 @@ permissions:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Fetch multiple weeks of public 5-minute spot and swap candles
         shell: bash
@@ -26,7 +26,7 @@ jobs:
           from pathlib import Path
 
           BASE = "https://www.okx.com/api/v5/market/history-candles"
-          TARGET = 5000
+          TARGET = 15000
           INSTRUMENTS = [
               "BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT",
               "BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP", "XRP-USDT-SWAP", "DOGE-USDT-SWAP",
@@ -53,7 +53,7 @@ jobs:
               cursor = None
               pages = 0
               try:
-                  while len(bars) < TARGET and pages < 70:
+                  while len(bars) < TARGET and pages < 180:
                       params = {"instId": inst, "bar": "5m", "limit": "100"}
                       if cursor is not None:
                           params["after"] = str(cursor)
