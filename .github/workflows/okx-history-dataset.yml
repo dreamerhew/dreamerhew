@@ -3,7 +3,7 @@ name: Collect Extended OKX Historical Candles
 on:
   push:
     branches:
-      - "research/market-data-endpoint-probe-20261017"
+      - "research/okx-history-45000-20261019"
     paths:
       - ".github/workflows/okx-history-dataset.yml"
   workflow_dispatch:
@@ -26,7 +26,7 @@ jobs:
           from pathlib import Path
 
           BASE = "https://www.okx.com/api/v5/market/history-candles"
-          TARGET = 15000
+          TARGET = 45000
           INSTRUMENTS = [
               "BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT",
               "BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP", "XRP-USDT-SWAP", "DOGE-USDT-SWAP",
@@ -53,7 +53,7 @@ jobs:
               cursor = None
               pages = 0
               try:
-                  while len(bars) < TARGET and pages < 180:
+                  while len(bars) < TARGET and pages < 520:
                       params = {"instId": inst, "bar": "5m", "limit": "100"}
                       if cursor is not None:
                           params["after"] = str(cursor)
